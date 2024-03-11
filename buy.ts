@@ -99,59 +99,67 @@ let snipeList: string[] = [];
 
 async function init(): Promise<void> {
   // get wallet
-  const PRIVATE_KEY = retrieveEnvVariable('PRIVATE_KEY', logger);
-  wallet = Keypair.fromSecretKey(bs58.decode(PRIVATE_KEY));
-  logger.info(`Wallet Address: ${wallet.publicKey}`);
 
-  // get quote mint and amount
-  const QUOTE_MINT = retrieveEnvVariable('QUOTE_MINT', logger);
-  const QUOTE_AMOUNT = retrieveEnvVariable('QUOTE_AMOUNT', logger);
-  switch (QUOTE_MINT) {
-    case 'WSOL': {
-      quoteToken = Token.WSOL;
-      quoteAmount = new TokenAmount(Token.WSOL, QUOTE_AMOUNT, false);
-      break;
+  const PRIVATE_KEYS = retrieveEnvVariable('PRIVATE_KEY', logger).split(',').map((key) => key.trim());
+
+  for (const privateKey of PRIVATE_KEYS) {
+    // get wallet
+    const wallet = Keypair.fromSecretKey(bs58.decode(privateKey));
+    logger.info(`Wallet Address: ${wallet.publicKey}`);
+
+    // get quote mint and amount
+    const QUOTE_MINT = retrieveEnvVariable('QUOTE_MINT', logger);
+    const QUOTE_AMOUNT = retrieveEnvVariable('QUOTE_AMOUNT', logger);
+    switch (QUOTE_MINT) {
+      case 'WSOL': {
+        quoteToken = Token.WSOL;
+        quoteAmount = new TokenAmount(Token.WSOL, QUOTE_AMOUNT, false);
+        break;
+      }
+      case 'USDC': {
+        quoteToken = new Token(
+          TOKEN_PROGRAM_ID,
+          new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),
+          6,
+          'USDC',
+          'USDC',
+        );
+        quoteAmount = new TokenAmount(quoteToken, QUOTE_AMOUNT, false);
+        break;
+      }
+      default: {
+        throw new Error(`Unsupported quote mint "${QUOTE_MINT}". Supported values are USDC and WSOL`);
+      }
     }
-    case 'USDC': {
-      quoteToken = new Token(
-        TOKEN_PROGRAM_ID,
-        new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),
-        6,
-        'USDC',
-        'USDC',
-      );
-      quoteAmount = new TokenAmount(quoteToken, QUOTE_AMOUNT, false);
-      break;
+
+    logger.info(
+      `Script will buy all new tokens using ${QUOTE_MINT}. Amount that will be used to buy each token is: ${quoteAmount.toFixed().toString()}`,
+    );
+
+    // check existing wallet for associated token account of quote mint
+    const tokenAccounts = await getTokenAccounts(solanaConnection, wallet.publicKey, commitment);
+
+    for (const ta of tokenAccounts) {
+      existingTokenAccounts.set(ta.accountInfo.mint.toString(), <MinimalTokenAccountData>{
+        mint: ta.accountInfo.mint,
+        address: ta.pubkey,
+      });
     }
-    default: {
-      throw new Error(`Unsupported quote mint "${QUOTE_MINT}". Supported values are USDC and WSOL`);
+
+    const tokenAccount = tokenAccounts.find((acc) => acc.accountInfo.mint.toString() === quoteToken.mint.toString())!;
+
+    if (!tokenAccount) {
+      throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
     }
+
+    quoteTokenAssociatedAddress = tokenAccount.pubkey;
+
+    // load tokens to snipe
+    loadSnipeList();
+
   }
 
-  logger.info(
-    `Script will buy all new tokens using ${QUOTE_MINT}. Amount that will be used to buy each token is: ${quoteAmount.toFixed().toString()}`,
-  );
 
-  // check existing wallet for associated token account of quote mint
-  const tokenAccounts = await getTokenAccounts(solanaConnection, wallet.publicKey, commitment);
-
-  for (const ta of tokenAccounts) {
-    existingTokenAccounts.set(ta.accountInfo.mint.toString(), <MinimalTokenAccountData>{
-      mint: ta.accountInfo.mint,
-      address: ta.pubkey,
-    });
-  }
-
-  const tokenAccount = tokenAccounts.find((acc) => acc.accountInfo.mint.toString() === quoteToken.mint.toString())!;
-
-  if (!tokenAccount) {
-    throw new Error(`No ${quoteToken.symbol} token account found in wallet: ${wallet.publicKey}`);
-  }
-
-  quoteTokenAssociatedAddress = tokenAccount.pubkey;
-
-  // load tokens to snipe
-  loadSnipeList();
 }
 
 function saveTokenAccount(mint: PublicKey, accountData: MinimalMarketLayoutV3) {
